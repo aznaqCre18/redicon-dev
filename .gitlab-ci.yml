@@ -1,0 +1,106 @@
+image: alpine
+
+stages:
+  - release
+
+release_development:
+  stage: release
+  before_script:
+    - apk add --no-cache zip openssh-client #sshpass --no-cache
+    - export LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+    - if [ -z "$LATEST_TAG" ]; then LATEST_TAG="Dev.v0.0.1"; else LATEST_TAG="Dev.v0.0.$(echo $LATEST_TAG | awk -F. '{print $NF + 1}')"; fi
+    - export NEXT_TAG=$LATEST_TAG
+    - echo "NEXT_TAG=$NEXT_TAG" > version.env
+  script:
+    - cp $ENV_FILE .env
+
+    # Package required files into a zip archive
+    - zip -r "API-$NEXT_TAG.zip" . -x ".git/*"
+
+    - cp $VM_KEY .privkey; chmod 600 .privkey
+
+    # Upload the zip to the remote server
+    - scp -i .privkey -o StrictHostKeyChecking=no "API-$NEXT_TAG.zip" root@$VM_IP:/app
+    - scp -i .privkey -o StrictHostKeyChecking=no "version.env" root@$VM_IP:/app
+
+    # Remote commands to deploy the application
+    - |
+      ssh -i .privkey -o StrictHostKeyChecking=no root@$VM_IP << 'EOF'
+      grep -q "192.168.0.29[[:space:]]pgsql.dev" /etc/hosts || echo "192.168.0.29	pgsql.dev" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.75[[:space:]]rabbitmq.dev" /etc/hosts || echo "192.168.0.75	rabbitmq.dev" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.65[[:space:]]redis.dev" /etc/hosts || echo "192.168.0.65	redis.dev" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.15[[:space:]]mariadb.dev" /etc/hosts || echo "192.168.0.15	mariadb.dev" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.10[[:space:]]storage-api.motapos.id" /etc/hosts || echo "192.168.0.10	storage-api.motapos.id" | tee -a /etc/hosts > /dev/null
+      cd /app
+      source version.env
+      unzip -o "API-$NEXT_TAG.zip"
+      rm -f "API-$NEXT_TAG.zip" "version.env"
+      npx next telemetry disable
+      export NODE_OPTIONS=--max-old-space-size=4096
+      npm i -g husky
+      yarn install
+      yarn run build
+      pm2 stop 0
+      pm2 delete 0
+      pm2 start "yarn run start" --name "App Development"
+      pm2 save
+      EOF
+  artifacts:
+    paths:
+      - version.env
+  only:
+    - dev
+  tags:
+    - shared
+  environment: development
+
+release_production:
+  stage: release
+  before_script:
+    - apk add --no-cache zip openssh-client #sshpass --no-cache
+    - export LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+    - if [ -z "$LATEST_TAG" ]; then LATEST_TAG="v0.0.1"; else LATEST_TAG="v0.0.$(echo $LATEST_TAG | awk -F. '{print $NF + 1}')"; fi
+    - export NEXT_TAG=$LATEST_TAG
+    - echo "NEXT_TAG=$NEXT_TAG" > version.env
+  script:
+    - cp $ENV_FILE .env
+
+    # Package required files into a zip archive
+    - zip -r "API-$NEXT_TAG.zip" . -x ".git/*"
+
+    - cp $VM_KEY .privkey; chmod 600 .privkey
+
+    # Upload the zip to the remote server
+    - scp -i .privkey -o StrictHostKeyChecking=no "API-$NEXT_TAG.zip" root@$VM_IP:/app
+    - scp -i .privkey -o StrictHostKeyChecking=no "version.env" root@$VM_IP:/app
+
+    # Remote commands to deploy the application
+    - |
+      ssh -i .privkey -o StrictHostKeyChecking=no root@$VM_IP << 'EOF'
+      grep -q "192.168.0.20[[:space:]]pgsql.prod" /etc/hosts || echo "192.168.0.20	pgsql.prod" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.71[[:space:]]rabbitmq.prod" /etc/hosts || echo "192.168.0.71	rabbitmq.prod" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.61[[:space:]]redis.prod" /etc/hosts || echo "192.168.0.61	redis.prod" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.11[[:space:]]mariadb.prod" /etc/hosts || echo "192.168.0.11	mariadb.prod" | tee -a /etc/hosts > /dev/null
+      grep -q "192.168.0.10[[:space:]]storage-api.motapos.id" /etc/hosts || echo "192.168.0.10	storage-api.motapos.id" | tee -a /etc/hosts > /dev/null
+      cd /app
+      source version.env
+      unzip -o "API-$NEXT_TAG.zip"
+      rm -f "API-$NEXT_TAG.zip" "version.env"
+      npx next telemetry disable
+      export NODE_OPTIONS=--max-old-space-size=4096
+      npm i -g husky
+      yarn install
+      yarn run build
+      pm2 stop 0
+      pm2 delete 0
+      pm2 start "yarn run start" --name "App Development"
+      pm2 save
+      EOF
+  artifacts:
+    paths:
+      - version.env
+  only:
+    - production
+  tags:
+    - shared
+  environment: production

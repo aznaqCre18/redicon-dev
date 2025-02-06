@@ -1,0 +1,74 @@
+# v0.X.Y used for versioning, where 0 is major version, X is minor version, Y is patch version
+# v0.0.1 - Initial version
+# v0.0.2 - Added CapRover deployment
+# Keep in mind to update v0 to v1 when you make a breaking change, and update X when you add a new feature, and Y when you fix a bug.
+# todo: Changes will be added to Release Notes
+image: docker:latest
+
+default:
+  before_script:
+    - export DOCKER_BUILDKIT=1
+
+stages:
+  - release
+  - deploy
+
+services:
+  - docker:dind
+
+release:
+  stage: release
+  before_script:
+    - apk add --no-cache curl
+    - export DOCKER_REGISTRY_USER=$CI_REGISTRY_USER
+    - export DOCKER_REGISTRY_PASSWORD=$CI_REGISTRY_PASSWORD
+    - export DOCKER_REGISTRY_URL=$CI_REGISTRY
+    - export IMAGE_NAME_WITH_REGISTRY_PREFIX=$CI_REGISTRY_IMAGE
+  script:
+    - echo "$DOCKER_REGISTRY_PASSWORD" | docker login --username "$DOCKER_REGISTRY_USER" --password-stdin $DOCKER_REGISTRY_URL
+    - export LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+    - if [ -z "$LATEST_TAG" ]; then LATEST_TAG="Dev.v0.0.1"; else LATEST_TAG="Dev.v0.0.$(echo $LATEST_TAG | awk -F. '{print $NF + 1}')"; fi
+    - export NEXT_TAG=$LATEST_TAG
+    - echo "NEXT_TAG=$NEXT_TAG" > deploy.env
+    - export CONTAINER_FULL_IMAGE_NAME_WITH_TAG=$IMAGE_NAME_WITH_REGISTRY_PREFIX/app:$NEXT_TAG
+    - cp $ENV_FILE .env
+    - docker build -f ./Dockerfile --pull -t app .
+    - docker tag app "$CONTAINER_FULL_IMAGE_NAME_WITH_TAG"
+    - docker push "$CONTAINER_FULL_IMAGE_NAME_WITH_TAG"
+    - |
+      curl --request POST --header "PRIVATE-TOKEN: $GITLAB_ACCESS_TOKEN" \
+        --data "name=Release $NEXT_TAG" \
+        --data "tag_name=$NEXT_TAG" \
+        --data "description=Release $NEXT_TAG" \
+        --data "ref=$CI_COMMIT_SHA" \
+        "https://git.shopi.id/api/v4/projects/Shopi%2Fdashboard/releases"
+  artifacts:
+    paths:
+      - deploy.env
+  only:
+    - dev
+  tags:
+    - nodejs
+  environment: development
+
+deploy:
+  stage: deploy
+  before_script:
+    - export DOCKER_REGISTRY_USER=$CI_REGISTRY_USER # built-in GitLab Registry User
+    - export DOCKER_REGISTRY_PASSWORD=$CI_REGISTRY_PASSWORD # built-in GitLab Registry Password
+    - export DOCKER_REGISTRY_URL=$CI_REGISTRY # built-in GitLab Registry URL
+    - export IMAGE_NAME_WITH_REGISTRY_PREFIX=$CI_REGISTRY_IMAGE # Your repository prefixed with GitLab Registry URL
+  script:
+    - echo "Deploying on CapRover..."
+    - export $(cat deploy.env | xargs)
+    - export CONTAINER_FULL_IMAGE_NAME_WITH_TAG=$IMAGE_NAME_WITH_REGISTRY_PREFIX/app:$NEXT_TAG
+    - docker login -u "$DOCKER_REGISTRY_USER" -p "$DOCKER_REGISTRY_PASSWORD" $DOCKER_REGISTRY_URL # Instructs GitLab to login to its registry
+    - docker pull "$CONTAINER_FULL_IMAGE_NAME_WITH_TAG"
+    - docker run caprover/cli-caprover:v2.1.1 caprover deploy --caproverUrl https://$CAPROVER_URL --caproverPassword $CAPROVER_PASSWORD --caproverApp $CAPROVER_APP --imageName $CONTAINER_FULL_IMAGE_NAME_WITH_TAG
+  dependencies:
+    - release
+  only:
+    - dev
+  tags:
+    - nodejs
+  environment: development

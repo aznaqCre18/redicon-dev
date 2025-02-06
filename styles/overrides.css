@@ -1,0 +1,11 @@
+.MuiOutlinedInput-notchedOutline {
+  border-width: 1px !important;
+}
+
+.select-input-group-custom {
+  border-right-width: 0px;
+}
+
+.MuiPopover-paper {
+  margin-top: 6px;
+}
